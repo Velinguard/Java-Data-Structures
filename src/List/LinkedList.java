@@ -4,6 +4,8 @@ import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
 import java.util.ListIterator;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class LinkedList<E> implements List<E> {
     private Node<E> head;
@@ -33,9 +35,16 @@ public class LinkedList<E> implements List<E> {
     public Node<E> getNode(int index) throws ArrayIndexOutOfBoundsException{
         assert(!isEmpty());
 
+        lockAll();
+
         Node<E> node = head;
-        for (; index > 0; index--){
-            node = head.getHead();
+        try {
+            for (; index > 0; index--){
+                node.unlock();
+                node = head.getHead();
+            }
+        } finally {
+            unlockall();
         }
         return node;
     }
@@ -43,32 +52,57 @@ public class LinkedList<E> implements List<E> {
     @Override
     public E get(int index) throws ArrayIndexOutOfBoundsException{
         assert(!isEmpty());
+
         return getNode(index).get();
     }
 
     @Override
     public boolean add(E e){
         int size = this.size;
+
         Node node = head;
+        node.lock();
+
         for(; size > 0; size--){
+            node.unlock();
             node = node.getHead();
+            node.lock();
         }
-        node.addHead(new Node(e));
-        this.size++;
-        return true;
+
+        try {
+            node.addHead(new Node(e));
+            this.size++;
+            return true;
+        } finally {
+            node.unlock();
+        }
     }
 
     @Override
     public void add(int index, E element){
         Node node = head;
-        Node previous = null;
-        for(; index >= 0; index--){
-            previous = node;
-            node = node.getHead();
+        node.lock();
+
+        Node previous = new Node(null);
+        previous.lock();
+
+        try {
+            for (; index >= 0; index--) {
+                previous.unlock();
+                previous = node;
+
+                node = node.getHead();
+                node.lock();
+            }
+
+            previous.addHead(new Node(element));
+            previous.getHead().addHead(node);
+            size++;
+        } finally {
+            previous.unlock();
+            node.unlock();
         }
-        previous.addHead(new Node(element));
-        previous.getHead().addHead(node);
-        size++;
+
     }
 
     @Override
@@ -85,12 +119,15 @@ public class LinkedList<E> implements List<E> {
     public boolean contains(Object o) {
         assert(!isEmpty());
 
+        lockAll();
         Node<E> node = head;
         int size = this.size;
         while (size > 0){
             if (node.get().equals(o)){
+                unlockall();
                 return true;
             }
+            node.unlock();
             node = node.getHead();
             size--;
         }
@@ -101,18 +138,31 @@ public class LinkedList<E> implements List<E> {
     public boolean remove(Object o) {
         assert(!isEmpty());
 
-        int size = this.size;
         Node node = head;
-        Node previous = null;
-        while(size > 0 && !node.get().equals(o)){
-            previous = node;
-            node = node.getHead();
-            size--;
-        }
-        previous.addHead(node.getHead());
+        node.lock();
 
-        this.size--;
-        return true;
+        Node previous = null;
+        previous.lock();
+
+        while(!node.get().equals(o)){
+            previous.unlock();
+            node.unlock();
+
+            previous = node;
+            previous.lock();
+
+            node = node.getHead();
+            node.lock();
+        }
+        try {
+            previous.addHead(node.getHead());
+
+            this.size--;
+            return true;
+        } finally {
+            node.unlock();
+            previous.unlock();
+        }
     }
 
     @Override
@@ -122,7 +172,7 @@ public class LinkedList<E> implements List<E> {
     }
 
     @Override
-    public E set(int index, E element) {
+    public synchronized E set(int index, E element) {
         assert(!isEmpty());
 
         Node node = head;
@@ -134,8 +184,23 @@ public class LinkedList<E> implements List<E> {
     }
 
     @Override
-    public E remove(int index) {
+    public synchronized E remove(int index) {
         assert(!isEmpty());
+
+        if(index == 0){
+            head.lock();
+            if (head.hasHead()){
+                head.getHead().lock();
+                E value = head.get();
+                head.unlock();
+                head = head.getHead();
+                head.unlock();
+                return value;
+            } else {
+                head = null;
+                return null;
+            }
+        }
 
         Node<E> node = head;
         Node previous = null;
@@ -145,6 +210,7 @@ public class LinkedList<E> implements List<E> {
             index--;
         }
         E output = node.get();
+
         previous.addHead(node.getHead());
         size--;
         return output;
@@ -157,7 +223,7 @@ public class LinkedList<E> implements List<E> {
      * @throws ArrayIndexOutOfBoundsException
      */
     @Override
-    public int indexOf(Object o) {
+    public synchronized int indexOf(Object o) {
         assert(!isEmpty());
 
         Node node = head;
@@ -172,18 +238,37 @@ public class LinkedList<E> implements List<E> {
     public int lastIndexOf(Object o) {
         assert(!isEmpty());
 
+        lockAll();
         Node node = head;
         int lastIndex = -1;
         for(int i = 0; i < size; i++){
             if (node.get().equals(o))
                 lastIndex = i;
             node = node.getHead();
+            node.unlock();
         }
         return lastIndex;
     }
 
+    public void lockAll(){
+        int size = this.size;
+        Node<E> node = head;
+        for (; size > 0; size--){
+            node.lock();
+            node = node.getHead();
+        }
+    }
+    public void unlockall(){
+        int size = this.size;
+        Node<E> node = head;
+        for (; size > 0; size--){
+            node.unlock();
+            node = node.getHead();
+        }
+    }
+
     @Override
-    public String toString(){
+    public synchronized String toString(){
         String output = "[";
         int size = this.size;
         Node node = head;
@@ -252,9 +337,12 @@ public class LinkedList<E> implements List<E> {
     }
     // </editor-fold>
 }
+
 class Node<E> {
     private E data;
     private Node head;
+    private Lock lock = new ReentrantLock();
+
     public Node(E data){
         this.data = data;
         this.head = null;
@@ -284,8 +372,15 @@ class Node<E> {
         return head;
     }
 
+    public void lock(){ lock.lock();}
+    public void unlock() { lock.unlock();}
+
     public E get(){
         return data;
+    }
+
+    public boolean hasHead(){
+        return head.equals(null);
     }
 
     public void update(E data){
