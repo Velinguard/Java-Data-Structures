@@ -36,7 +36,7 @@ class runner implements Runnable{
         for (; i > 0; i--) {
             //list.add(new Integer(3));
             list.add(new Integer(4));
-            list.remove(2);
+            list.remove(2   );
             list.add(new Integer(2));
             list.add(new Integer(3));
             list.remove(1);
